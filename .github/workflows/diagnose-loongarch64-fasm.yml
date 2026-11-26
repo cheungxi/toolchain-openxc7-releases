@@ -38,4 +38,27 @@ jobs:
           ANTLR4_RUNTIME_INCLUDE=/usr/include/antlr4-runtime python3 -m pip install -v \
             --no-build-isolation --target /tmp/site /tmp/fasm
           PYTHONPATH=/tmp/site python3 -Werror::RuntimeWarning -c 'from fasm.parser.antlr import parse_fasm_string; print(list(parse_fasm_string("FOO.BAR\n")))'
+          mkdir /tmp/relocated
+          cd /tmp/relocated
+          ln -s /repo/store store
+          PYTHONPATH=/repo:/tmp/site python3 - <<'PY'
+          from pack.assemble import distribution_init
+          from pack.relocate import copy_python, copy_python_dep, place_linux_loader
+
+          distribution_init()
+          copy_python()
+          for module in ("fasm", "textx", "arpeggio"):
+              copy_python_dep(module)
+          place_linux_loader()
+          PY
+          env -u PYTHONPATH -u PYTHONHOME dist/libexec/tabbypy3 -W error::RuntimeWarning - <<'PY'
+          from pathlib import Path
+
+          import fasm
+          from fasm.parser.antlr import parse_fasm_string
+
+          assert Path(fasm.__file__).resolve().is_relative_to(Path("dist").resolve())
+          assert parse_fasm_string("FOO.BAR\n")[0].set_feature.feature == "FOO.BAR"
+          print("Relocated Python successfully parsed FASM with the packaged modules")
+          PY
           BASH

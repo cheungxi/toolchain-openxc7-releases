@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from pack import LIB, PRIVATE_LIB
-from pack.relocate import linux_loader_exec, render_tabbypy3
+from pack.relocate import PYTHON_NAME, linux_loader_exec, render_tabbypy3
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -27,6 +27,15 @@ class TestPrivateLibConstant(unittest.TestCase):
 
 
 class TestLinuxLoader(unittest.TestCase):
+
+    def test_loongarch_tabbypy3_sets_the_bundled_python_path(self):
+        template = (REPO / "store" / "tabbypy3").read_text(encoding="utf-8")
+        with mock.patch("pack.relocate.IS_LOONGARCH64", True):
+            rendered = render_tabbypy3(template)
+        self.assertIn(
+            f'export PYTHONPATH="$release_topdir_abs/lib/{PYTHON_NAME}/site-packages"\n',
+            rendered,
+        )
 
     def test_exec_line_uses_the_private_directory(self):
         line = linux_loader_exec(

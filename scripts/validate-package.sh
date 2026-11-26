@@ -261,6 +261,13 @@ if [[ "$PLAT" == linux-* ]]; then
     ok "Linux loader is libexec/ld-linux; tabbypy3 is libexec/ not bin/ (apio#1116)"
 fi
 
+if [ "$PLAT" = "linux-loongarch64" ]; then
+    # Exercise the relocated Python before probing every supported part.
+    FASM_OUT=$(env -u PYTHONHOME -u PYTHONPATH PYTHONWARNINGS=error::RuntimeWarning \
+        "$PKG/bin/fasm2frames" --help 2>&1) || fail "fasm2frames does not run: $FASM_OUT"
+    ok "fasm2frames loads the bundled Python modules"
+fi
+
 # A native package must match the host (windows validates under wine anywhere
 # with wine64; a linux tarball cannot be validated on darwin or vice versa).
 if [ -n "$TARBALL" ]; then

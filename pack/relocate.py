@@ -36,6 +36,7 @@ PYTHON_NAME = (
     f"python{sys.version_info.major}.{sys.version_info.minor}"
     if IS_LOONGARCH64 else "python3.12"
 )
+PYTHON_SITE_PACKAGES = f"{LIB}/{PYTHON_NAME}/site-packages"
 
 
 def python_stdlib(executable: Path) -> Path:
@@ -92,12 +93,19 @@ def place_linux_loader():
 
 
 def render_tabbypy3(template: str) -> str:
-    """Fill the ``store/tabbypy3`` marker with ``linux_loader_exec``."""
+    """Fill the ``store/tabbypy3`` marker with the interpreter launch."""
     marker = "@LINUX_LOADER_EXEC@"
     if marker not in template:
         raise SystemExit(f"❌ store/tabbypy3 has no {marker} marker")
     program = f'"$release_topdir_abs"/libexec/{PYTHON_NAME}'
-    rendered = template.replace(marker, linux_loader_exec(program).rstrip("\n"))
+    launch = linux_loader_exec(program)
+    if IS_LOONGARCH64:
+        # Debian Python searches dist-packages even with PYTHONHOME set.
+        launch = (
+            f'export PYTHONPATH="$release_topdir_abs/{PYTHON_SITE_PACKAGES}"\n'
+            + launch
+        )
+    rendered = template.replace(marker, launch.rstrip("\n"))
     if marker in rendered:
         raise SystemExit(f"❌ store/tabbypy3 still contains {marker}")
     return rendered + ("" if rendered.endswith("\n") else "\n")
@@ -452,7 +460,7 @@ def copy_python_dep(modname: str):
     src = resolve_python_package(modname)
 
     # -- Target directory
-    dst_site_pack = Path.cwd() / DIST / LIB / PYTHON_NAME / "site-packages"
+    dst_site_pack = Path.cwd() / DIST / PYTHON_SITE_PACKAGES
     dst = dst_site_pack / src.name
 
     # -- Give write permissions to the "site-packages" directory
