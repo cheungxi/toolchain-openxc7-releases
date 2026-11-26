@@ -5,28 +5,65 @@ on:
     branches: [ci/loongarch64]
 
 permissions:
+  actions: read
   contents: read
 
+env:
+  # The previous run successfully generated these bins from the same sources.
+  SEED_RUN: '45768553926'
+
 jobs:
-  prepare:
+  seed:
     runs-on: ubuntu-24.04
     outputs:
-      date: ${{ steps.date.outputs.value }}
+      date: ${{ steps.seed.outputs.date }}
+      chipdb_id: ${{ steps.seed.outputs.chipdb_id }}
+      parts_index: ${{ steps.seed.outputs.parts_index }}
     steps:
-      - id: date
-        run: echo "value=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SEED_RUN }}
+          name: chipdb-bins
+          path: chipdb-bins
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SEED_RUN }}
+          name: parts-index
+          path: parts-index
+      - name: Check the artifact identity and date
+        id: seed
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
 
-  chipdb:
-    needs: prepare
-    uses: ./.github/workflows/chipdb.yml
-    with:
-      date: ${{ needs.prepare.outputs.date }}
+          index = Path("parts-index/XILINX-PARTS-INVENTORY.json")
+          document = json.loads(index.read_text())
+          identity = Path("chipdb-bins/chipdb-id.txt").read_text().strip()
+          if not identity or identity != document["chipdb-id"]:
+              raise SystemExit("chipdb identity does not match the parts inventory")
+          print(f"date={document['release-tag']}")
+          print(f"chipdb_id={identity}")
+          print(f"parts_index={index.name}")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chipdb-bins
+          path: chipdb-bins/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: parts-index
+          path: parts-index/
+          if-no-files-found: error
 
   loongarch64:
-    needs: [prepare, chipdb]
+    needs: seed
     uses: ./.github/workflows/loongarch64-package.yml
     with:
-      date: ${{ needs.prepare.outputs.date }}
-      chipdb_source: generated
-      chipdb_id: ${{ needs.chipdb.outputs.identity }}
-      parts_index: ${{ needs.chipdb.outputs.parts_index }}
+      date: ${{ needs.seed.outputs.date }}
+      chipdb_source: restored-from-cache
+      chipdb_id: ${{ needs.seed.outputs.chipdb_id }}
+      parts_index: ${{ needs.seed.outputs.parts_index }}
