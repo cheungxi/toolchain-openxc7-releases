@@ -45,6 +45,28 @@ while read -r name repository rev submodules; do
     fi
 done < "$work/revisions"
 
+# Use the shared ANTLR runtime and key install paths by extension name.
+# Newer setuptools Extension objects are unhashable.
+sed -i \
+    -e "s/self.antlr_runtime = 'static'/self.antlr_runtime = 'shared'/" \
+    -e 's/self\.install_dirs\[ext\]/self.install_dirs[ext.name]/g' \
+    "$work/fasm/setup.py"
+# The vendored GoogleTest uses uintptr_t without including its header.
+sed -i '/^#include <utility>$/i #include <cstdint>' \
+    "$work/fasm/third_party/googletest/googletest/src/gtest-death-test.cc"
+# Test the parser before compiling the larger tools. setup.py can emit a
+# wheel after silently falling back to the Python parser.
+ANTLR4_RUNTIME_INCLUDE=/usr/include/antlr4-runtime python3 -m pip install --verbose \
+    --no-build-isolation --target "$work/python" "$work/fasm" \
+    pyyaml simplejson intervaltree sortedcontainers
+PYTHONPATH="$work/python" python3 -W error::RuntimeWarning -c '
+from fasm.parser.antlr import parse_fasm_string
+
+assert parse_fasm_string("TEST.FEATURE\n")[0].set_feature.feature == "TEST.FEATURE"
+'
+mkdir -p "$work/fasm-tools/bin"
+mv "$work/python/bin/fasm" "$work/fasm-tools/bin/"
+
 nextpnr="$work/nextpnr"
 db="$work/prjxray-db"
 xray="$work/prjxray"
@@ -71,14 +93,6 @@ done
 for tool in fasm2frames bit2fasm; do
     install "$xray/prjxray/$tool.py" "$work/prjxray-tools/bin/$tool"
 done
-
-# Build the same native ANTLR parser as the Nix package.
-sed -i "s/self.antlr_runtime = 'static'/self.antlr_runtime = 'shared'/" "$work/fasm/setup.py"
-ANTLR4_RUNTIME_INCLUDE=/usr/include/antlr4-runtime python3 -m pip install \
-    --no-build-isolation --target "$work/python" "$work/fasm" \
-    pyyaml simplejson intervaltree sortedcontainers
-mkdir -p "$work/fasm-tools/bin"
-mv "$work/python/bin/fasm" "$work/fasm-tools/bin/"
 
 platform=linux-loongarch64
 dateid="${OPENXC7_PACK_DATE//-/}"
