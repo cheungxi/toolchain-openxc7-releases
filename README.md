@@ -3,9 +3,10 @@
 Binary releases of the [openXC7](https://github.com/openXC7) toolchain for
 **Xilinx 7-series FPGAs** (Artix-7, Spartan-7, Zynq-7000 PL): place and
 route, bitstream generation and the device databases, as one package per
-platform (Linux x86-64, macOS on Apple Silicon, Windows x64), built
-reproducibly with [Nix](https://nixos.org) and validated end to end on
-every platform before they are published.
+platform (Linux x86-64, Linux LoongArch64, macOS on Apple Silicon,
+Windows x64). CI builds Linux LoongArch64 in Debian under QEMU and uses
+[Nix](https://nixos.org) for the other packages. Every package is validated
+end to end before publication.
 
 Two release lines come out of here:
 
@@ -44,15 +45,16 @@ One tarball per platform, `openxc7-toolchain-<platform>-<YYYYMMDD>.tgz`:
 | Platform | Built on | Notes |
 |---|---|---|
 | `linux-x86-64` | Linux, natively | Carries its own Python for `fasm2frames`, `bit2fasm` and `xc7pll` |
+| `linux-loongarch64` | Debian 14 (forky, `loong64`) under QEMU on a GitHub-hosted Linux runner | LoongArch64 LP64D, with bundled Python. See the release notes for the Debian Yosys version used in CI |
 | `darwin-arm64` | macOS on Apple Silicon, natively | Carries its own Python for `fasm2frames`, `bit2fasm` and `xc7pll`; Mach-O libraries relocated and ad-hoc signed (`macpack.py`) |
 | `windows-amd64` | cross-compiled from Linux (mingw) | No Python in the package. `bin/*.cmd` try `OPENXC7_PYTHON`, then `python3`, `python` and `py -3`. With apio, `python3` is oss-cad-suite's (`{oss-cad-suite}\lib` is on `PATH`) |
 
 On Linux and macOS the shared libraries the tools load live in
 `lib/openxc7/`, not at the first level of `lib/`. `lib/` itself holds
-only directories (`lib/python3.12/` and `lib/openxc7/`), which is what
+only directories (the bundled Python tree and `lib/openxc7/`), which is what
 keeps those names out of a PATH scan that looks at `lib/`
 ([apio#1116](https://github.com/FPGAwars/apio/issues/1116)). The Linux
-wrappers exec `libexec/ld-linux-x86-64.so.2` with `--library-path`
+wrappers exec the platform's ELF loader from `libexec/` with `--library-path`
 pointed at `lib/openxc7/`. The loader sits next to the binaries because
 it is the file the kernel executes: nextpnr reads `/proc/self/exe` and
 looks for `../share/nextpnr`. On macOS each Mach-O carries an
@@ -100,14 +102,14 @@ A7-Lite; ZXTRES, ZXTRES+ and ZXTRES++.
 
 ## The yosys these packages require
 
-Synthesis is **not** in the packages: it comes from
-[yosys](https://github.com/YosysHQ/yosys), through a release of
+The Linux x86-64, macOS and Windows packages use
+[Yosys](https://github.com/YosysHQ/yosys) from
 [YosysHQ's oss-cad-suite](https://github.com/YosysHQ/oss-cad-suite-build).
-Every release is validated with exactly one such release, and says which:
+The release notes and each of those packages record the suite tag:
 
 - the release text starts with **"Requires yosys: YosysHQ oss-cad-suite
   `<tag>`"**;
-- every package declares it as `yosys-release-tag` in its `BUILD-INFO.json`.
+- the package declares it as `yosys-release-tag` in its `BUILD-INFO.json`.
 
 It is declared because the result of place and route depends on the
 netlist yosys hands it: another yosys may synthesise differently, and the
@@ -116,6 +118,11 @@ check it: apio compares the tag with the one its own oss-cad-suite package
 names, at run time. The tag is written in exactly one place,
 `YOSYS_RELEASE_TAG` in `.github/workflows/build-pre-release.yaml`.
 
+On Linux LoongArch64, install Debian's `yosys` and put it on `PATH`. The
+package's `BUILD-INFO.json` and the release notes record the Debian package
+version used in CI as `yosys-version`. LoongArch64 packages are available
+for manual installation.
+
 ## Manual install
 
 1. From a release, download the tarball of your platform and `SHA256SUMS`,
@@ -123,9 +130,8 @@ names, at run time. The tag is written in exactly one place,
    `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 2. Extract it anywhere: `mkdir openxc7 && tar xzf openxc7-toolchain-<platform>-<date>.tgz -C openxc7`.
 3. Put `openxc7/bin` on your `PATH`.
-4. Install the YosysHQ oss-cad-suite release the release text names, and put
-   its `bin` on your `PATH` too (on Windows `fasm2frames` runs with its
-   Python).
+4. Install the Yosys listed for your platform in the release notes and put
+   it on `PATH`. On Windows, `fasm2frames` also uses the suite's Python.
 
 ## Using it
 
@@ -367,10 +373,11 @@ To bump yosys:
 | Workflow | What it does |
 |---|---|
 | `test.yaml` | Per commit: compile nextpnr-xilinx, prjxray and fasm on linux and macos, nextpnr-xilinx and prjxray on windows-cross, plus the static gates |
-| `build-pre-release.yaml` | Daily (and on dispatch): the chipdb once, the three platforms in parallel, then the release |
+| `build-pre-release.yaml` | Daily (and on dispatch): the chipdb once, platform packages in parallel, then the release |
 | `build-upstream-nightly.yaml` | Daily at 02:00 UTC (and on dispatch): the same graph over the HEAD of every openXC7 repository, L2 in report mode, then the `upstream-<date>` pre-release |
 | `chipdb.yml` | Generates or restores the chipdb, one file per die, three at a time under a memory budget; writes the identity stamp and the parts inventory |
 | `linux-package.yml`, `darwin-package.yml`, `windows-package.yml` | Build one platform's package with those bins inside, then L1 and L2 (windows under wine) |
+| `loongarch64-package.yml` | Build and run L1 and L2 in an emulated Debian `loong64` container using the same chipdb bins |
 | `make-pre-release-stable.yaml` | By hand: re-verifies a release (`scripts/asset-check.sh --full`) and marks it stable; `latest` on request |
 
 The per-platform and chipdb workflows are `workflow_call` only:
@@ -378,11 +385,15 @@ The per-platform and chipdb workflows are `workflow_call` only:
 `build-upstream-nightly.yaml` of the upstream one), and a validated package
 of any branch is a dispatch of it on that branch.
 
+To include LoongArch64 in dated releases, set the repository Actions variable
+`OPENXC7_BUILD_LOONGARCH64` to `true`. The next scheduled or manually
+dispatched dated build will validate the package and include
+`openxc7-toolchain-linux-loongarch64-<YYYYMMDD>.tgz` in the release.
+
 **Dated nightly (the stable line).** Every day `build-pre-release` publishes a **pre-release** whose
 tag is the UTC date (`2026-09-30`), only after every platform is green. It
-carries six assets: the three tarballs, `XILINX-PARTS-INVENTORY.json`,
-`BUILD-INFO.json` (what the three packages agree on, plus each one's file
-name and build time) and `SHA256SUMS` over the other five. The naming rule
+carries the enabled platforms' tarballs, `XILINX-PARTS-INVENTORY.json`,
+`BUILD-INFO.json` and `SHA256SUMS`. The naming rule
 is the whole contract with a consumer: tag `YYYY-MM-DD` → asset
 `openxc7-toolchain-<platform>-<YYYYMMDD>.tgz` at that release;
 `scripts/asset-check.sh <tag>` checks a published release against it. Only
@@ -392,12 +403,12 @@ the newest five dated pre-releases are kept.
 builds the HEAD of the default branch of `openXC7/nextpnr`,
 `openXC7/prjxray-db`, `openXC7/prjxray` and `openxc7/fasm`: it writes
 those revisions into `nix/revisions.json`, commits that on a branch
-`upstream/<date>` and builds that commit through the same graph, with the
+`upstream/<date>` and builds that commit for Linux x86-64, macOS and Windows with the
 same yosys. L1 and the end-to-end gate as on the dated line; L2 runs with
 `--report-only`, so the drift against the dated line's baselines is listed
 in the release text ("Changes against the main-line baselines") instead of
 failing the build. It publishes the pre-release **`upstream-<date>`**:
-the same six assets, named by the date, a text that opens with the
+the three platform packages and release metadata, named by the date, a text that opens with the
 revisions it was built from next to the dated line's, and a tag on the
 commit that records them (building it again builds the same sources). Its
 own five newest are kept, apart from the dated ones. It is never stable
@@ -439,8 +450,8 @@ Workflow permissions: read and write).
 
 Anything that can download a GitHub release asset can consume these
 releases: the whole contract is the naming rule (tag `YYYY-MM-DD` → the
-six assets named by that date), `SHA256SUMS` to check them, `latest` as
-the newest stable release, and the yosys tag each release declares.
+assets named by that date), `SHA256SUMS` to check them, `latest` as
+the newest stable release, and the Yosys versions each release declares.
 Nothing here depends on any consumer.
 
 The first one is [apio](https://github.com/FPGAwars/apio), which installs

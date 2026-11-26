@@ -153,18 +153,14 @@ else
 fi
 
 # --- identify the package platform -----------------------------------------
-HOST=$(uname -s)
 if [ -f "$PKG/bin/nextpnr-xilinx.exe" ]; then
     PLAT="windows-amd64"
     NEXTPNR_BIN="$PKG/bin/nextpnr-xilinx.exe"
     [ "$WINE" = 1 ] || fail "windows package: pass --wine (validation runs under wine64)"
     command -v wine64 >/dev/null 2>&1 || fail "wine64 not on PATH"
 elif [ -f "$PKG/libexec/nextpnr-xilinx" ]; then
-    case "$HOST" in
-        Darwin) PLAT="darwin-arm64" ;;
-        Linux)  PLAT="linux-x86-64" ;;
-        *) fail "unsupported host: $HOST" ;;
-    esac
+    PLAT=$(PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -c 'from pack.platform import plat_token; print(plat_token())')
     NEXTPNR_BIN="$PKG/libexec/nextpnr-xilinx"
     [ "$WINE" = 0 ] || fail "--wine given but this is not a windows package"
 else
@@ -209,19 +205,21 @@ if [ "$PLAT" != "windows-amd64" ]; then
     ok "private libraries live in $PRIVATE_LIB (apio#1116)"
 fi
 
-if [ "$PLAT" = "linux-x86-64" ]; then
+if [[ "$PLAT" == linux-* ]]; then
+    LOADER=$(PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -c 'import sys; from pack.platform import LINUX_LOADERS; print(LINUX_LOADERS[sys.argv[1]])' "$PLAT")
     # The loader is exec'd, so /proc/self/exe is the loader. nextpnr
     # finds share/ as ../share/nextpnr from that directory, which is
     # true for libexec/ and not for a loader nested under lib/.
-    [ -e "$PKG/libexec/ld-linux-x86-64.so.2" ] \
+    [ -e "$PKG/libexec/$LOADER" ] \
         || fail "Linux loader is not in libexec/ (apio#1116)"
-    [ ! -e "$PKG/$PRIVATE_LIB/ld-linux-x86-64.so.2" ] \
+    [ ! -e "$PKG/$PRIVATE_LIB/$LOADER" ] \
         || fail "Linux loader is in $PRIVATE_LIB; nextpnr would miss share/ (apio#1116)"
     bad=0
     while IFS= read -r w; do
         [ -n "$w" ] || continue
         if grep -q 'ld-linux' "$w"; then
-            if ! grep -q "/libexec/ld-linux-x86-64.so.2" "$w"; then
+            if ! grep -Fq "/libexec/$LOADER " "$w"; then
                 echo "loader not in libexec: ${w#"$PKG"/}" >&2
                 bad=1
             fi
@@ -238,7 +236,7 @@ if [ "$PLAT" = "linux-x86-64" ]; then
         || fail "bin/ contains tabbypy3 (apio#1116)"
     [ -f "$PKG/libexec/tabbypy3" ] \
         || fail "tabbypy3 is not in libexec/ (apio#1116)"
-    grep -q "/libexec/ld-linux-x86-64.so.2" "$PKG/libexec/tabbypy3" \
+    grep -Fq "/libexec/$LOADER " "$PKG/libexec/tabbypy3" \
         || fail "tabbypy3 does not exec the libexec loader (apio#1116)"
     grep -q -- "--library-path \"\$release_topdir_abs\"/$PRIVATE_LIB " "$PKG/libexec/tabbypy3" \
         || fail "tabbypy3 library-path is not $PRIVATE_LIB (apio#1116)"

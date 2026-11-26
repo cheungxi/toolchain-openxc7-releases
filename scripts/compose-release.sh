@@ -4,14 +4,14 @@
 #
 #   scripts/compose-release.sh <tag> [release-body.py options]
 #
-# Run in the directory that holds the three platform tarballs and
+# Run in the directory that holds the platform tarballs and
 # XILINX-PARTS-INVENTORY.json (the pre-release job of build-pre-release and of
 # build-upstream-nightly, after downloading their artifacts). It checks
 # that every tarball carries the date of the tag, the same index bytes in
 # its chipdb directory and the bins that index names, and writes the other
 # three things the release publishes or shows:
 #   BUILD-INFO.json   the release-level build info (scripts/release-build-info.py)
-#   SHA256SUMS        of the five other assets
+#   SHA256SUMS        of the other assets
 #   RELEASE-BODY.md   the release text (scripts/release-body.py; the options
 #                     after the tag go to it: --main-revisions and --drift
 #                     for an upstream tag)
@@ -19,6 +19,7 @@
 # The tag is a dated one (2026-10-01) or an upstream one
 # (upstream-2026-10-01); the assets and the index carry its date either
 # way (pack/release_tags.py).
+# Set OPENXC7_RELEASE_LOONGARCH64=true when the dated build enables that job.
 
 set -euo pipefail
 
@@ -66,17 +67,23 @@ fi
 # (pack/parts_index.py, the one owner of the format) accepted it
 # for the date of this tag.
 python3 - "$DATE_TAG" <<'PYEOF'
-import json, sys, tarfile, tempfile
+import json, os, sys, tarfile, tempfile
 from pathlib import Path
 from pack.parts_index import (CHIPDB_SUBDIR, PACKAGE_FILE, PACKAGE_PATH,
                               index_members, index_note, validate_document,
                               validate_package_info)
+from pack.platform import LOONGARCH64, RELEASE_PLATFORMS
 tag = sys.argv[1]
 published = Path(PACKAGE_FILE)
 raw = published.read_bytes()
 tarballs = sorted(Path(".").glob("openxc7-toolchain-*.tgz"))
-if len(tarballs) != 3:
-    sys.exit(f"::error::expected 3 platform tarballs, found {[p.name for p in tarballs]}")
+loongarch = os.environ.get("OPENXC7_RELEASE_LOONGARCH64") == "true"
+expected = {f"openxc7-toolchain-{platform}-{tag.replace('-', '')}.tgz"
+            for platform in RELEASE_PLATFORMS if platform != LOONGARCH64 or loongarch}
+actual = {p.name for p in tarballs}
+if actual != expected:
+    sys.exit(f"::error::platform tarballs: missing {sorted(expected - actual)}, "
+             f"unexpected {sorted(actual - expected)}")
 for tarball in tarballs:
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
@@ -141,36 +148,33 @@ for f in openxc7-toolchain-*.tgz; do
         echo
     } >> BUILD-INFOS.md
 done
-# The release-level document: the fields the three packages agree
+# The release-level document: the fields the packages agree
 # on, plus a row per package for the ones that are properly
-# per-package. Composing it IS the agreement check — three
+# per-package. Composing it IS the agreement check —
 # packages built from different sources stop the release here.
 python3 "$REPO_ROOT/scripts/release-build-info.py" build-infos/*.json > BUILD-INFO.json
 cat BUILD-INFO.json
 # It describes THIS tag: the packages were told the tag they are
 # published under (an upstream build that forgot would claim a dated tag).
-python3 - "$TAG" <<'PYEOF'
+python3 - "$TAG" openxc7-toolchain-*.tgz <<'PYEOF'
 import json, sys
-recorded = json.load(open("BUILD-INFO.json"))["release-tag"]
+info = json.load(open("BUILD-INFO.json"))
+recorded = info["release-tag"]
 if recorded != sys.argv[1]:
     sys.exit(f"::error::the packages record release-tag {recorded!r}, "
              f"the release is {sys.argv[1]!r}")
+if sorted(entry["file-name"] for entry in info["packages"].values()) != sorted(sys.argv[2:]):
+    sys.exit("::error::BUILD-INFO.json does not name the release tarballs")
 PYEOF
 
-# SHA256SUMS covers EVERY asset of the release: the three
-# packages, the index and the build info. Six assets. Written
+# SHA256SUMS covers the packages, the index and the build info. Written
 # HERE, in the job that uploads them, from the very bytes that
 # the upload sends — the manifest and the release cannot
 # describe different bytes.
 sha256sum openxc7-toolchain-*.tgz "$INDEX" BUILD-INFO.json > SHA256SUMS
 cat SHA256SUMS
-# The release is six assets; SHA256SUMS lists the other five and not
-# itself. A sixth line would be a chipdb asset or a stray file,
-# and asset-check would fail the release on it.
-LINES=$(wc -l < SHA256SUMS)
-[ "$LINES" -eq 5 ] || { echo "::error::SHA256SUMS has $LINES lines, expected 5"; exit 1; }
 # The release text: what the packages are, the yosys they need,
-# the six assets, the revisions and a manual install -- a release
+# the assets, the revisions and a manual install -- a release
 # usable without apio. Composed from the document just checked.
 python3 "$REPO_ROOT/scripts/release-body.py" BUILD-INFO.json BUILD-INFOS.md "$@" > RELEASE-BODY.md
 cat RELEASE-BODY.md

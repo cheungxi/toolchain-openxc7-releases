@@ -16,6 +16,8 @@ from . import DIST, BIN, LIBEXEC, PRIVATE_LIB
 from .families import families
 from .platform import IS_DARWIN
 from .relocate import (
+    IS_LOONGARCH64,
+    PYTHON_NAME,
     bash_shebang_add,
     copy_exec,
     copy_python,
@@ -23,6 +25,7 @@ from .relocate import (
     copy_with_deps,
     is_elf,
     linux_loader_exec,
+    needed_deps,
     is_python_script,
     is_shell_script,
     python_ctypes,
@@ -419,6 +422,9 @@ def run_phase3_fasm():
         raise SystemExit(f"❌ antlr: ningun objeto nativo en {parser_dir}")
     antlr_lib = resolve_needed_in(objects, r"libantlr4-runtime\..*")
 
+    if IS_LOONGARCH64:
+        # The Debian package collects the closure of all Python extensions.
+        return
     if IS_DARWIN:
         # -- macOS: the LC_LOAD_DYLIB path already names the real file
         # -- (looked up by libparse_fasm.dylib via @rpath -> PRIVATE_LIB).
@@ -495,7 +501,7 @@ def run_phase3_prjxray():
     # --
     # -- PRJXRAY_NO_FILE_LOCK=1 skips the attempt entirely, for anyone who
     # -- prefers not to pay the timeout on a filesystem known to be hostile.
-    PATCH_DIR = "lib/python3.12/site-packages/prjxray"
+    PATCH_DIR = f"lib/{PYTHON_NAME}/site-packages/prjxray"
     util_file = Path.cwd() / DIST / PATCH_DIR / "util.py"
     text = util_file.read_text()
 
@@ -628,6 +634,16 @@ def install_components():
     # -------- prjxray tool
     process_binaries("fasm2frames")
     run_phase3_prjxray()
+
+    if IS_LOONGARCH64:
+        copy_python_dep("arpeggio")
+        # Debian's Python extensions link to system libraries separately
+        # from the interpreter. Collect those dependencies for relocation.
+        dst = Path(DIST) / PRIVATE_LIB
+        for extension in (Path(DIST) / "lib" / PYTHON_NAME).rglob("*.so"):
+            for name, source in needed_deps(extension).items():
+                if not (dst / name).exists():
+                    shutil.copy2(source, dst / name)
 
     # -------- xc7pll (PLL parameter calculator; pure-stdlib python).
     # -------- The script lives in libexec/ and bin/xc7pll execs the

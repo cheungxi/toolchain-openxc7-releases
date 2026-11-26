@@ -6,15 +6,15 @@
 # The naming rule: everything derives from the release TAG. Tag 2026-06-13
 # (or upstream-2026-06-13, the upstream nightly)
 # -> date 20260613 -> asset openxc7-toolchain-<platform>-20260613.tgz at
-# that release's download URL, for platform linux-x86-64, darwin-arm64 and
-# windows-amd64. A consumer that knows the tag (a manual install, or a
+# that release's download URL, for platform linux-x86-64, darwin-arm64,
+# windows-amd64 or linux-loongarch64. A consumer that knows the tag (a manual install, or a
 # repackager such as apio's tools-openxc7) needs nothing else. A mistagged
 # release, a misdated asset name or a missing platform is a 404 for it on
 # that platform (the 2026-07-24 class of failure: a consumer pointed at a
 # tag whose release was never published). This script chases exactly that:
 # it recomputes each URL by the rule and checks what is actually there.
 #
-# A schema 8 release publishes six assets (apio#1070): the three platform
+# A schema 8 release publishes the platform
 # tarballs, SHA256SUMS, XILINX-PARTS-INVENTORY.json and BUILD-INFO.json. The
 # chipdb files travel inside each tarball, in the engine's share directory
 # (share/nextpnr/himbaechel/xilinx/chipdb-<die>.bin); the index names no
@@ -34,7 +34,7 @@
 # pack.parts_index.names_chipdb_files) -- is reported as legacy, not failed.
 #
 # SHA256SUMS covers every asset since apio#990 (it used to list only the
-# three packages). A current release's manifest lists the six assets
+# packages). A current release's manifest lists the assets
 # above and nothing else.
 #
 # BUILD-INFO.json is published alongside them since apio#1009: the identity
@@ -72,7 +72,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$TAG" ] || { echo "usage: scripts/asset-check.sh <tag> [--expect-dir DIR] [--full] [--platform p]..." >&2; exit 2; }
-[ ${#PLATFORMS[@]} -gt 0 ] || PLATFORMS=(linux-x86-64 darwin-arm64 windows-amd64)
 
 python3 - "$REPO_ROOT" "$TAG" "$EXPECT_DIR" "$FULL" "${PLATFORMS[@]}" <<'PYEOF'
 import hashlib, io, json, os, sys, tarfile, time
@@ -89,6 +88,7 @@ from pack.parts_index import (CHIPDB_SUBDIR, INDEX_ASSET, SCHEMA,  # noqa: E402
                               STAMP_FILE, chipdb_name, index_members,
                               index_note, is_legacy_name, names_chipdb_files,
                               previous_index_asset_names, validate_document)
+from pack.platform import LOONGARCH64, RELEASE_PLATFORMS  # noqa: E402
 from pack.release_tags import split_tag  # noqa: E402
 
 repo = os.environ.get("ASSET_CHECK_REPO", "cavearr/toolchain-openxc7-releases")
@@ -124,8 +124,7 @@ def request(url, method="GET", attempts=3):
     if token and url.startswith("https://api.github.com/"):
         req.add_header("Authorization", f"Bearer {token}")
     # A transient connection failure is not an answer about the release, and
-    # this check makes one request per published asset -- six on a current
-    # release, the three platform packages with --full. Retried, with a pause; an
+    # this check makes one request per published asset. Retried, with a pause; an
     # HTTPError is NOT retried, because 404 is the answer we came for.
     for attempt in range(1, attempts + 1):
         try:
@@ -195,8 +194,10 @@ def read_hashed(source):
 # Every name this run looked at, to catch a manifest line describing an
 # asset the release does not have (checked at the end).
 accounted = set()
+all_platforms = not platforms
 
-for platform in platforms:
+
+def check_platform(platform):
     asset = package_asset(platform)
     accounted.add(asset)
     url = f"{base}/{asset}"
@@ -206,21 +207,21 @@ for platform in platforms:
         print(f"   a consumer WILL 404 on {platform}: the asset for tag {tag} must be")
         print(f"   named with the tag's date ({date}) and live at that release.")
         failed.append(asset)
-        continue
+        return
     line = f"✅ {asset}: HTTP 200 ({size / 1e6:.0f} MB)"
 
     published = sums.get(asset)
     if published is None and sums:
         print(f"❌ {asset}: published but MISSING from SHA256SUMS")
         failed.append(asset)
-        continue
+        return
 
     if expect_dir:
         local = os.path.join(expect_dir, asset)
         if not os.path.exists(local):
             print(f"❌ {asset}: --expect-dir has no such file ({local})")
             failed.append(asset)
-            continue
+            return
         with open(local, "rb") as fh:
             local_sha = sha256_stream(fh)
         if published is not None:
@@ -228,7 +229,7 @@ for platform in platforms:
                 print(f"❌ {asset}: local sha256 {local_sha[:12]}… != published SHA256SUMS {published[:12]}…")
                 print("   the uploaded asset is NOT the package that was validated")
                 failed.append(asset)
-                continue
+                return
             line += " · sha256 == SHA256SUMS == local"
         elif full:
             with request(url) as resp:
@@ -236,7 +237,7 @@ for platform in platforms:
             if remote_sha != local_sha:
                 print(f"❌ {asset}: downloaded sha256 {remote_sha[:12]}… != local {local_sha[:12]}…")
                 failed.append(asset)
-                continue
+                return
             line += " · sha256(downloaded) == local"
         else:
             line += f" · local sha256 {local_sha[:12]}… (no SHA256SUMS to compare; use --full)"
@@ -246,7 +247,7 @@ for platform in platforms:
         if published is not None and remote_sha != published:
             print(f"❌ {asset}: downloaded sha256 {remote_sha[:12]}… != SHA256SUMS {published[:12]}…")
             failed.append(asset)
-            continue
+            return
         package_blobs[asset] = blob
         line += f" · sha256(downloaded) {remote_sha[:12]}…" + (" == SHA256SUMS" if published else "")
 
@@ -260,7 +261,7 @@ BUILD_INFO = "BUILD-INFO.json"
 
 
 def check_build_info():
-    """Validate the published build info; True when the release has one.
+    """Return the published build info after validation, if available.
 
     It answers "what exactly is this build" without downloading a package,
     which is what apio's crawler reads it for, so the thing that must hold
@@ -287,7 +288,7 @@ def check_build_info():
             print(f"— {BUILD_INFO}: not published (HTTP 404)")
             print("  legacy release: published before the build info"
                   " travelled as an asset of its own")
-        return False
+        return None
     accounted.add(BUILD_INFO)
 
     try:
@@ -295,7 +296,7 @@ def check_build_info():
     except (ValueError, UnicodeDecodeError) as error:
         print(f"❌ {BUILD_INFO}: not readable as JSON ({error})")
         failed.append(BUILD_INFO)
-        return False
+        return None
 
     if info.get("release-tag") != tag:
         print(f"❌ {BUILD_INFO}: release-tag {info.get('release-tag')!r}, not "
@@ -303,7 +304,7 @@ def check_build_info():
         print("   the identity published under this tag is another"
               " release's")
         failed.append(BUILD_INFO)
-        return False
+        return None
 
     # Each package it names must be the one the rule resolves for that platform
     # from this tag: the same date rule the tarballs above go through,
@@ -316,7 +317,7 @@ def check_build_info():
                   f"{entry.get('file-name')!r}, this release ships "
                   f"{expected}")
             failed.append(BUILD_INFO)
-            return False
+            return None
 
     line = (f"✅ {BUILD_INFO}: HTTP 200 ({len(raw)} B) · release-tag"
             f" {info['release-tag']} · {len(packages)} packages ·"
@@ -330,20 +331,29 @@ def check_build_info():
         if published is None:
             print(f"❌ {BUILD_INFO}: published but MISSING from SHA256SUMS")
             failed.append(BUILD_INFO)
-            return False
+            return None
         if published != digest:
             print(f"❌ {BUILD_INFO}: sha256 {digest[:12]}… != SHA256SUMS "
                   f"{published[:12]}…")
             print("   the published build info is not the one SHA256SUMS"
                   " records")
             failed.append(BUILD_INFO)
-            return False
+            return None
         line += " · sha256 == SHA256SUMS"
     print(line)
-    return True
+    return info
 
 
-has_build_info = check_build_info()
+build_info = check_build_info()
+if all_platforms:
+    # The original platforms are also checked on releases that predate the
+    # manifests. LoongArch is required as soon as either manifest names it.
+    published = (build_info or {}).get("packages") or {}
+    platforms = [platform for platform in RELEASE_PLATFORMS
+                 if platform != LOONGARCH64 or platform in published
+                 or package_asset(platform) in sums]
+for platform in platforms:
+    check_platform(platform)
 
 # ---------------------------------------------------------------------------
 # The parts index. The chipdb files it names travel inside each platform
@@ -537,7 +547,7 @@ index_checked = check_chipdb_release()
 # describe -- a leftover chipdb asset from an earlier contract, or a name
 # the index forgot. Only meaningful when the whole release was walked (no
 # --platform filter, and an index this gate could read).
-if covers_everything and index_checked and len(platforms) == 3:
+if covers_everything and index_checked and all_platforms:
     extra = sorted(set(sums) - accounted)
     if extra:
         print(f"❌ SHA256SUMS lists {len(extra)} asset(s) nothing in this "
@@ -550,7 +560,7 @@ if failed:
 tail = ("; chipdb files travel inside the platform packages"
         + (" and match the index" if full else "")
         if index_checked else "")
-if has_build_info:
+if build_info:
     tail += "; its BUILD-INFO.json names this very tag"
 if index_checked and covers_everything:
     tail += f"; SHA256SUMS ({len(sums)} entries) agrees with the index"

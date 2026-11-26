@@ -1,0 +1,79 @@
+name: loongarch64-package
+
+on:
+  workflow_call:
+    inputs:
+      date:
+        required: true
+        type: string
+      chipdb_source:
+        required: true
+        type: string
+      chipdb_id:
+        required: true
+        type: string
+      parts_index:
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: build + validate linux-loongarch64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: chipdb-bins
+          path: chipdb-bins
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: parts-index
+          path: parts-index
+
+      - name: Register LoongArch64 QEMU
+        run: docker run --privileged --rm tonistiigi/binfmt:qemu-v10.2.3-68 --install loong64
+
+      - name: Build and validate the package in Debian loong64
+        id: pack
+        env:
+          OPENXC7_PACK_DATE: ${{ inputs.date }}
+          CHIPDB_SOURCE: ${{ inputs.chipdb_source }}
+          CHIPDB_ID: ${{ inputs.chipdb_id }}
+          OPENXC7_PARTS_INDEX: /workspace/parts-index/${{ inputs.parts_index }}
+        run: |
+          docker run --rm --platform linux/loong64 \
+            --volume "$GITHUB_WORKSPACE:/workspace" --workdir /workspace \
+            -e OPENXC7_PACK_DATE -e CHIPDB_SOURCE -e CHIPDB_ID \
+            -e OPENXC7_PARTS_INDEX -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW \
+            -e GITHUB_RUN_ID -e GITHUB_RUN_NUMBER \
+            ghcr.io/loong64/debian:forky-slim@sha256:8a78b976d7e01f630440098d17577996943f38abaf18f3155cf5a29a53cf6bac \
+            bash scripts/build-loongarch64-package.sh
+          echo "tarball=openxc7-toolchain-linux-loongarch64-${OPENXC7_PACK_DATE//-/}.tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the regression report in the job summary
+        if: always()
+        run: |
+          if [ -f regress-report.md ]; then
+            cat regress-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: regress-report-linux-loongarch64
+          path: regress-report.*
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: openxc7-toolchain-linux-loongarch64
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error

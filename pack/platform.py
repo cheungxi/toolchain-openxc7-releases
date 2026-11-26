@@ -8,6 +8,12 @@ import platform
 # -- only imported on Darwin (see pack.relocate). The Linux path stays
 # -- untouched.
 IS_DARWIN = platform.system() == "Darwin"
+LOONGARCH64 = "linux-loongarch64"
+RELEASE_PLATFORMS = ("linux-x86-64", "darwin-arm64", "windows-amd64", LOONGARCH64)
+LINUX_LOADERS = {
+    "linux-x86-64": "ld-linux-x86-64.so.2",
+    LOONGARCH64: "ld-linux-loongarch-lp64d.so.1",
+}
 
 
 def plat_token() -> str:

@@ -40,7 +40,14 @@ if [ -f "$OCS_ROOT/VERSION" ]; then
             YOSYS_TAG="${digits:0:4}-${digits:4:2}-${digits:6:2}" ;;
     esac
 fi
-[ "$YOSYS_TAG" != unknown ] || echo "warning: no usable $OCS_ROOT/VERSION; yosys-release-tag=unknown" >&2
+YOSYS_VERSION_FIELD=""
+if [ "$PLAT" = linux-loongarch64 ]; then
+    : "${YOSYS_VERSION:?set YOSYS_VERSION to the Debian package version used for validation}"
+    YOSYS_TAG=unknown
+    YOSYS_VERSION_FIELD="  \"yosys-version\"                  : \"$YOSYS_VERSION\","
+elif [ "$YOSYS_TAG" = unknown ]; then
+    echo "warning: no usable $OCS_ROOT/VERSION; yosys-release-tag=unknown" >&2
+fi
 
 # Provenance of the chipdb bins inside the package (apio#940 follow-up,
 # asked by zapta): how they were obtained in THIS build and the identity
@@ -116,7 +123,8 @@ cat > "$OUT" <<EOF
   "description"                    : "openXC7 toolchain for Xilinx 7-series FPGAs: nextpnr-xilinx, prjxray, fasm and the chipdb",
   "release-tag"                    : "$TAG",
   "yosys-release-tag"              : "$YOSYS_TAG",
-  "nextpnr-xilinx-revision"        : "${NEXTPNR_REV:-unknown}",
+${YOSYS_VERSION_FIELD:+$YOSYS_VERSION_FIELD
+}  "nextpnr-xilinx-revision"        : "${NEXTPNR_REV:-unknown}",
   "prjxray-db-revision"            : "${PRJXRAY_DB_REV:-unknown}",
   "prjxray-revision"               : "${PRJXRAY_REV:-unknown}",
   "fasm-revision"                  : "${FASM_REV:-unknown}",

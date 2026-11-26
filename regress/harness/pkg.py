@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pack.families import family_of
+from pack.platform import plat_token
 from pack.parts_index import (CHIPDB_SUBDIR, SCHEMA, chipdb_name,
                               chipdb_subdir, names_chipdb_files,
                               package_index_files, package_schema,
@@ -104,10 +105,7 @@ class Package:
         if not (root / "libexec" / "nextpnr-xilinx").exists():
             raise SystemExit(f"unrecognised package layout at {root}")
 
-        host = subprocess.run(["uname", "-s"], capture_output=True, text=True).stdout.strip()
-        platform = {"Darwin": "darwin-arm64", "Linux": "linux-x86-64"}.get(host)
-        if platform is None:
-            raise SystemExit(f"unsupported host: {host}")
+        platform = plat_token()
         return cls(root=root, platform=platform, chipdb_dir=chipdb_dir,
                    schema=schema, chipdb_files=chipdb_files,
                    names_chipdb=names_chipdb, chipdb_rel=subdir,

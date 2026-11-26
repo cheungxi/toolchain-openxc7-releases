@@ -83,6 +83,18 @@ def run_cli(documents):
 
 
 class ComposeTests(unittest.TestCase):
+    def test_loongarch_records_its_yosys_without_changing_the_suite_tag(self):
+        platform = "linux-loongarch64"
+        loongarch = package(platform)
+        loongarch.update({"yosys-release-tag": "unknown", "yosys-version": "0.66-1"})
+        documents = {platform: loongarch, **release()}
+        composed = release_build_info.compose(documents)
+        self.assertEqual(composed["yosys-release-tag"], package("linux-x86-64")["yosys-release-tag"])
+        self.assertEqual(composed["packages"][platform]["yosys-version"], "0.66-1")
+        loongarch["chipdb-id"] = "other"
+        with self.assertRaisesRegex(ValueError, "chipdb-id"):
+            release_build_info.compose(documents)
+
 
     def test_shared_fields_are_kept_and_a_row_per_package_added(self):
         document = release_build_info.compose(release())

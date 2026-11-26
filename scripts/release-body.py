@@ -6,7 +6,7 @@ The release has to be usable on its own, without apio: so its text says
 what the packages are, which yosys they need, what each asset is, the
 revisions they were built from, and how to install one by hand. The facts
 come from the release-level BUILD-INFO.json (scripts/release-build-info.py,
-the document the three packages agree on) and, for a revision that
+the document the packages agree on) and, for a revision that
 document does not carry, from nix/revisions.json, the one file that
 records them.
 
@@ -15,7 +15,7 @@ records them.
         --main-revisions <revisions.json of the main line> \
         --drift <regress report JSON>... > RELEASE-BODY.md
 
-<per-package md> is the block of the three package documents the workflow
+<per-package md> is the block of package documents the workflow
 already renders; it goes under "Build info" as it is. A main-line text
 ends with a "Pre-release note" section, and make-pre-release-stable drops
 exactly that section on promotion (tests/test_release_body.py).
@@ -37,10 +37,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 from pack.parts_index import PACKAGE_FILE, PACKAGE_PATH  # noqa: E402
+from pack.platform import LOONGARCH64, RELEASE_PLATFORMS  # noqa: E402
 from pack.release_tags import split_tag  # noqa: E402
 
 PACKAGE = "openxc7-toolchain"
-PLATFORMS = ("linux-x86-64", "darwin-arm64", "windows-amd64")
 SUITE = "https://github.com/YosysHQ/oss-cad-suite-build/releases/tag"
 REVISIONS = REPO_ROOT / "nix/revisions.json"
 
@@ -124,7 +124,10 @@ def body(info, per_package, main_revisions=None, reports=None):
     yosys = info["yosys-release-tag"]
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", yosys or ""):
         raise ValueError(f"yosys-release-tag {yosys!r} is not a release tag")
-    tarballs = [f"{PACKAGE}-{platform}-{date}.tgz" for platform in PLATFORMS]
+    loongarch = info.get("packages", {}).get(LOONGARCH64)
+    platforms = [platform for platform in RELEASE_PLATFORMS
+                 if platform != LOONGARCH64 or loongarch]
+    tarballs = [f"{PACKAGE}-{platform}-{date}.tgz" for platform in platforms]
     built = revisions(info)
     lines = []
     if upstream:
@@ -143,32 +146,37 @@ def body(info, per_package, main_revisions=None, reports=None):
         f"openXC7 toolchain — {tag}: `nextpnr-xilinx`, prjxray (`xc7frames2bit`,",
         "`bitread`, `xc7patch`), `fasm2frames` and the chipdb for Xilinx",
         "7-series FPGAs (Artix-7, Spartan-7, Zynq-7000 PL), one package per",
-        "platform. Validated by CI on the three platforms: package gate,",
-        "multi-part end-to-end and regression suite.",
+        "platform. CI validates package layout and runs multi-part",
+        "end-to-end and regression tests.",
         "",
         "### Requires yosys",
         f"**Requires yosys: YosysHQ oss-cad-suite [`{yosys}`]({SUITE}/{yosys}).**",
-        "The packages carry no synthesis: this release was validated with the",
-        "yosys of that suite, and every package declares it as",
-        "`yosys-release-tag` in its `BUILD-INFO.json`. apio checks at run time",
-        "that the oss-cad-suite it installs names the same tag. Another yosys",
-        "may work, but it is not what these packages were validated with.",
+        "The Linux x86-64, macOS and Windows packages declare the suite's",
+        "`yosys-release-tag` in `BUILD-INFO.json`. apio checks this tag at runtime.",
         "",
+    ]
+    if loongarch:
+        lines.extend([
+            f"**Linux LoongArch64** requires Debian's `yosys`. CI used version "
+            f"`{loongarch['yosys-version']}` on Debian 14 (forky, `loong64`).",
+            "Install that Yosys and put it on your PATH before using the toolchain.",
+            "",
+        ])
+    lines += [
         "### Assets",
         "| Asset | What it is |",
         "|---|---|",
     ]
-    for platform, tarball in zip(PLATFORMS, tarballs):
+    for platform, tarball in zip(platforms, tarballs):
         lines.append(f"| `{tarball}` | The toolchain for {platform}, "
                      "with every chipdb file where nextpnr-xilinx looks for it, " "`share/nextpnr/himbaechel/xilinx/` |")
     lines += [
         f"| `{PACKAGE_FILE}` | The parts inventory every package carries as "
         f"`{PACKAGE_PATH}`: each part of the packaged database and whether "
         "this release built it |",
-        "| `BUILD-INFO.json` | What the three packages agree on (revisions, "
-        "yosys tag, chipdb identity, commit, run), plus each package's file "
-        "and build time |",
-        "| `SHA256SUMS` | SHA-256 of the other five assets |",
+        "| `BUILD-INFO.json` | Build revisions, synthesis versions, chipdb "
+        "identity, commit, run and per-package details |",
+        "| `SHA256SUMS` | SHA-256 of the tarballs, inventory and build info |",
         "",
         "### Revisions",
     ]
@@ -215,8 +223,7 @@ def body(info, per_package, main_revisions=None, reports=None):
         "",
         "### Manual install",
         "```sh",
-        "# 1. the package for your platform (linux-x86-64 here; darwin-arm64",
-        "#    and windows-amd64 alike), checked against SHA256SUMS",
+        "# 1. the package for your platform (linux-x86-64 in this example)",
         f"curl -LO https://github.com/{info.get('build-repo', '<repo>')}"
         f"/releases/download/{tag}/{tarballs[0]}",
         f"curl -LO https://github.com/{info.get('build-repo', '<repo>')}"

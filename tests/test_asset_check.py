@@ -184,8 +184,7 @@ def run(files, *args, flaky=0, calls=None, tag=TAG) -> tuple:
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
         return FakeResponse(files[url])
 
-    argv = ["-", str(REPO), tag, "", "0",
-            "linux-x86-64", "darwin-arm64", "windows-amd64"]
+    argv = ["-", str(REPO), tag, "", "0"]
     for index, value in enumerate(args):
         argv[3 + index] = value
     output = io.StringIO()
@@ -241,6 +240,21 @@ class UpstreamTagTests(unittest.TestCase):
 
 
 class AssetCheckTests(unittest.TestCase):
+    def test_loongarch_build_info_requires_the_platform_asset(self):
+        files = release()
+        name = f"openxc7-toolchain-linux-loongarch64-{DATE}.tgz"
+        info = json.loads(files[f"{BASE}/{BUILD_INFO}"])
+        info["packages"]["linux-loongarch64"] = {"file-name": name}
+        files[f"{BASE}/{BUILD_INFO}"] = json.dumps(info).encode()
+        code, output = run(resum(files))
+        self.assertEqual(code, 1, output)
+        self.assertIn(f"{name}: HTTP 404", output)
+
+        files[f"{BASE}/{name}"] = files[f"{BASE}/openxc7-toolchain-linux-x86-64-{DATE}.tgz"]
+        code, output = run(resum(files), "", "1")
+        self.assertEqual(code, 0, output)
+        self.assertIn(f"{name}: HTTP 200", output)
+
     def test_healthy_release_passes(self):
         code, output = run(release())
         self.assertEqual(code, 0, output)

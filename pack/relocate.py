@@ -13,12 +13,14 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
+import sysconfig
 from pathlib import Path
 
 import ansi
 
 from . import DIST, BIN, LIBEXEC, LIB, PRIVATE_LIB
-from .platform import IS_DARWIN
+from .platform import IS_DARWIN, LINUX_LOADERS, LOONGARCH64, plat_token
 
 # -- The macOS (Mach-O) packaging backend. Only imported on Darwin; the
 # -- CLI shim calls macpack.relocate_dist() once, after all binaries,
@@ -27,7 +29,19 @@ if IS_DARWIN:
     import macpack  # noqa: F401  (darwin relocation backend, used by the shim)
 
 
-LINUX_LOADER = f"{LIBEXEC}/ld-linux-x86-64.so.2"
+IS_LOONGARCH64 = sys.platform == "linux" and plat_token() == LOONGARCH64
+LOADER_NAME = LINUX_LOADERS[LOONGARCH64 if IS_LOONGARCH64 else "linux-x86-64"]
+LINUX_LOADER = f"{LIBEXEC}/{LOADER_NAME}"
+PYTHON_NAME = (
+    f"python{sys.version_info.major}.{sys.version_info.minor}"
+    if IS_LOONGARCH64 else "python3.12"
+)
+
+
+def python_stdlib(executable: Path) -> Path:
+    if IS_LOONGARCH64:
+        return Path(sysconfig.get_path("stdlib"))
+    return executable.parent.parent / LIB / PYTHON_NAME
 
 
 def linux_loader_exec(program: str) -> str:
@@ -36,7 +50,7 @@ def linux_loader_exec(program: str) -> str:
     *program* is one shell word, quotes included when it has any.
     ``--library-path`` is ``PRIVATE_LIB``: that is the process search
     path, including the later dlopen of libffi from ``_ctypes`` and of
-    libantlr4. The loader itself is ``libexec/ld-linux-x86-64.so.2``.
+    libantlr4.
     It is the file the kernel executes, so ``/proc/self/exe`` points at
     it, and nextpnr resolves ``share/`` as ``../share/nextpnr`` from that
     directory (``common/kernel/command.cc``). ``libexec/`` is where the
@@ -65,7 +79,7 @@ def place_linux_loader():
     """
     if IS_DARWIN:
         return
-    src = Path.cwd() / DIST / PRIVATE_LIB / "ld-linux-x86-64.so.2"
+    src = Path.cwd() / DIST / PRIVATE_LIB / LOADER_NAME
     dst = Path.cwd() / DIST / LINUX_LOADER
     if not src.is_file():
         raise SystemExit(
@@ -82,7 +96,7 @@ def render_tabbypy3(template: str) -> str:
     marker = "@LINUX_LOADER_EXEC@"
     if marker not in template:
         raise SystemExit(f"❌ store/tabbypy3 has no {marker} marker")
-    program = '"$release_topdir_abs"/libexec/python3.12'
+    program = f'"$release_topdir_abs"/libexec/{PYTHON_NAME}'
     rendered = template.replace(marker, linux_loader_exec(program).rstrip("\n"))
     if marker in rendered:
         raise SystemExit(f"❌ store/tabbypy3 still contains {marker}")
@@ -123,10 +137,8 @@ def get_dependencies(binary: str) -> dict:
             lib_name = match.group(1)
             lib_path = match.group(2)
 
-            # -- Special case: ld-linux-x86-64.so.2
-            # -- In nix it comes with the full path in the name. We truncate
-            # -- it to just the name
-            if "ld-linux-x86" in lib_name:
+            # Nix may report the loader with its full path as the name.
+            if "ld-linux" in lib_name:
                 lib_name = Path(lib_name).name
             deps[lib_name] = lib_path
 
@@ -241,8 +253,8 @@ def copy_with_deps(binary: str):
 def copy_python():
 
     # --- Copy the wrapper (tabbypy3)
-    # -- Linux only: tabbypy3 hardcodes the ld-linux-x86-64 loader. On
-    # -- macOS the python wrapper runs the bundled python3.12.
+    # -- Linux only: tabbypy3 invokes the packaged ELF loader. On
+    # -- macOS the python wrapper runs the bundled interpreter directly.
     # -- libexec/, not bin/. apio scans the first-level files of bin/
     # -- (apio#1116) and this name collides with oss-cad-suite. The
     # -- python wrappers call it by an absolute path.
@@ -262,8 +274,8 @@ def copy_python():
         print(f"➡️  Dep: ✅libexec/tabbypy3")
 
     # -- Copy the python executable
-    src = Path(str(shutil.which("python3.12")))
-    dst = Path.cwd() / DIST / LIBEXEC / "python3.12"
+    src = Path(str(shutil.which(PYTHON_NAME)))
+    dst = Path.cwd() / DIST / LIBEXEC / PYTHON_NAME
     if dst.exists():
         mark = "📌"
     else:
@@ -272,8 +284,8 @@ def copy_python():
     print(f"➡️  Dep: {mark}libexec/{src.name}")
 
     # -- Copy the whole python directory
-    src = src.parent.parent / "lib" / "python3.12"
-    dst = Path.cwd() / DIST / LIB / "python3.12"
+    src = python_stdlib(src)
+    dst = Path.cwd() / DIST / LIB / PYTHON_NAME
     if dst.exists():
         mark = "📌"
     else:
@@ -291,7 +303,7 @@ def copy_python():
     if not IS_DARWIN:
         libs_target_dir = Path.cwd() / DIST / PRIVATE_LIB
         libs_target_dir.mkdir(parents=True, exist_ok=True)
-        for lib_name, libs_path in get_dependencies("python3.12").items():
+        for lib_name, libs_path in get_dependencies(PYTHON_NAME).items():
             if libs_path == "":
                 continue
             lib_target = libs_target_dir / Path(libs_path).name
@@ -416,8 +428,8 @@ def resolve_needed_in(objects: list, pattern: str) -> Path:
 # ------------------------------------------------------------------
 def python_ctypes() -> Path:
 
-    python = Path(str(shutil.which("python3.12")))
-    dynload = python.parent.parent / "lib" / "python3.12" / "lib-dynload"
+    python = Path(str(shutil.which(PYTHON_NAME)))
+    dynload = python_stdlib(python) / "lib-dynload"
 
     objects = sorted(p for p in dynload.glob("_ctypes*.so")
                      if p.name.startswith("_ctypes."))
@@ -440,7 +452,7 @@ def copy_python_dep(modname: str):
     src = resolve_python_package(modname)
 
     # -- Target directory
-    dst_site_pack = Path.cwd() / DIST / LIB / "python3.12" / "site-packages"
+    dst_site_pack = Path.cwd() / DIST / LIB / PYTHON_NAME / "site-packages"
     dst = dst_site_pack / src.name
 
     # -- Give write permissions to the "site-packages" directory

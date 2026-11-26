@@ -7,13 +7,14 @@
 #
 #   chipdb.yml           ubuntu-22.04   bins + XILINX-PARTS-INVENTORY
 #   linux-package.yml    ubuntu-22.04   native   (seeds the bins into the package)
+#   loongarch64-package.yml ubuntu-24.04 QEMU   (optional Debian loong64)
 #   darwin-package.yml   macos-15        native   (seeds the bins into the package)
 #   windows-package.yml  ubuntu-22.04   cross    (copies the bins into the package; wine)
 #
 # There is ONE chipdb source: the bins that job generates. Each package
 # ships them in share/nextpnr/himbaechel/xilinx/, where the engine
 # looks for them, and embeds that job's
-# XILINX-PARTS-INVENTORY.json. The release publishes the three tarballs, that
+# XILINX-PARTS-INVENTORY.json. The release publishes the platform tarballs, that
 # index, BUILD-INFO.json and SHA256SUMS — no per-die chipdb asset. Each
 # platform carries its own gate. The platform workflows are
 # workflow_call-only, so this is the ONE entry point: a validated package
@@ -43,7 +44,7 @@ on:
         required: false
 
 # THE one place that names the yosys: the YosysHQ/oss-cad-suite-build release
-# every job installs and validates against. apio's `oss-cad-suite` package
+# the x86-64, macOS and Windows jobs validate against. apio's `oss-cad-suite` package
 # repackages one such release, and apio checks at run time that both packages
 # name the same tag, so a bump is agreed with its maintainer (README, Bumping
 # yosys). Nothing else states it: build-info.sh derives the package's
@@ -100,7 +101,7 @@ jobs:
       # here; cleanup-old-prereleases (keep-5) absorbs the extra releases.
 
       # Fail FAST if today's tag already exists as a stable release — before
-      # spending 3 platform builds on a run that must not publish.
+      # spending time on platform builds for a run that must not publish.
       # just-check does not delete; a same-tag pre-release is replaced later,
       # in the pre-release job, after every platform is green (~50 s window).
       # To rebuild a stable tag: mark it pre-release first, never delete it
@@ -134,6 +135,16 @@ jobs:
       chipdb_id: ${{ needs.chipdb.outputs.identity }}
       parts_index: ${{ needs.chipdb.outputs.parts_index }}
 
+  loongarch64:
+    if: vars.OPENXC7_BUILD_LOONGARCH64 == 'true'
+    needs: [prepare, chipdb]
+    uses: ./.github/workflows/loongarch64-package.yml
+    with:
+      date: ${{ needs.prepare.outputs.date }}
+      chipdb_source: generated
+      chipdb_id: ${{ needs.chipdb.outputs.identity }}
+      parts_index: ${{ needs.chipdb.outputs.parts_index }}
+
   darwin:
     needs: [prepare, chipdb]
     uses: ./.github/workflows/darwin-package.yml
@@ -155,14 +166,20 @@ jobs:
       parts_index: ${{ needs.chipdb.outputs.parts_index }}
 
   pre-release:
-    needs: [prepare, chipdb, linux, darwin, windows]
+    needs: [prepare, chipdb, linux, darwin, windows, loongarch64]
+    if: >-
+      !cancelled() &&
+      needs.prepare.result == 'success' && needs.chipdb.result == 'success' &&
+      needs.linux.result == 'success' && needs.darwin.result == 'success' &&
+      needs.windows.result == 'success' &&
+      (vars.OPENXC7_BUILD_LOONGARCH64 != 'true' || needs.loongarch64.result == 'success')
     runs-on: ubuntu-22.04            # ecosystem runner version (apio hit issues on 24.04; see apio build-linux-x86-64.yaml)
     steps:
       - uses: actions/checkout@v7    # scripts/asset-check.sh
 
       - uses: actions/download-artifact@v8
         with:
-          pattern: openxc7-toolchain-*     # the 3 package artifacts (not chipdb-bins)
+          pattern: openxc7-toolchain-*
           merge-multiple: true
 
       # The same document each package embedded. Published as its own
@@ -195,9 +212,11 @@ jobs:
 
       # Every tarball dated with the tag and carrying the index and its
       # bins; then the release-level BUILD-INFO.json (the agreement check
-      # of the three packages), SHA256SUMS and the release text. The same
+      # of the packages), SHA256SUMS and the release text. The same
       # script composes the upstream nightly's release.
       - name: Check the assets and compose the release body
+        env:
+          OPENXC7_RELEASE_LOONGARCH64: ${{ vars.OPENXC7_BUILD_LOONGARCH64 }}
         run: bash scripts/compose-release.sh "${{ needs.prepare.outputs.date }}"
 
       # The same action the FPGAwars packages use (a local copy).
