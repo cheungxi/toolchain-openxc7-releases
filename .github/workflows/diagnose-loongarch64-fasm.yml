@@ -33,6 +33,8 @@ jobs:
           sed -i \
             -e "s/self.antlr_runtime = 'static'/self.antlr_runtime = 'shared'/" \
             -e 's/self\.install_dirs\[ext\]/self.install_dirs[ext.name]/g' /tmp/fasm/setup.py
+          sed -i '/^#include <utility>$/i #include <cstdint>' \
+            /tmp/fasm/third_party/googletest/googletest/src/gtest-death-test.cc
           ANTLR4_RUNTIME_INCLUDE=/usr/include/antlr4-runtime python3 -m pip install -v \
             --no-build-isolation --target /tmp/site /tmp/fasm
           PYTHONPATH=/tmp/site python3 -Werror::RuntimeWarning -c 'from fasm.parser.antlr import parse_fasm_string; print(list(parse_fasm_string("FOO.BAR\n")))'
