@@ -1,0 +1,32 @@
+name: Test LoongArch64 package
+
+on:
+  push:
+    branches: [ci/loongarch64]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      date: ${{ steps.date.outputs.value }}
+    steps:
+      - id: date
+        run: echo "value=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+  chipdb:
+    needs: prepare
+    uses: ./.github/workflows/chipdb.yml
+    with:
+      date: ${{ needs.prepare.outputs.date }}
+
+  loongarch64:
+    needs: [prepare, chipdb]
+    uses: ./.github/workflows/loongarch64-package.yml
+    with:
+      date: ${{ needs.prepare.outputs.date }}
+      chipdb_source: generated
+      chipdb_id: ${{ needs.chipdb.outputs.identity }}
+      parts_index: ${{ needs.chipdb.outputs.parts_index }}
